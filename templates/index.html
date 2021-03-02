@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+
+<html lang="en-US">
+
+<head>
+  <title>Index</title>
+  <meta charset="UTF-8">
+  <script src="/static/index.js" defer></script>
+</head>
+
+<body>
+  <div id="connect-div">
+    <input id="room-input" type="text" placeholder="Room ID" maxlength="8"><br>
+    <button id="room-join-button" onclick="joinRoom()">Join Room</button>
+    <br>
+    <button id="room-start-button" onclick="startRoom()">Start Room</button>
+    <p id="connect-err-p" style="color:red"></p>
+  </div>
+
+  <div id="pregame-div" hidden>
+    <h2 id="pregame-h1"></h2>
+    <input id="name-input" type="text" placeholder="Name">
+    <button id="name-button" onclick="submitName()">Submit</button>
+    <p id="pregame-err-p" style="color:red"></p>
+    <h3>Members</h3>
+    <ul id="members-list"></ul>
+  </div>
+
+  <div id="lobby-div" hidden>
+    <h1>Time Left: <span id="lobby-time-span"></span></h1>
+    <ul id="member-list">
+      <li><button onclick="changeConvo(this)">All</button></li>
+    </ul>
+    <table id="message-table">
+      <tr>
+        <th>Sender</th>
+        <th>Body</th>
+      </tr>
+    </table>
+  </div>
+
+  <div id="deposit-div" hidden>
+    <!-- Allow split coins (for now -->
+    <p><span id="coins-span">5</span> coins left</p>
+    <p>Time Left: <span id="deposit-time-span">1:00</span></p>
+    <label for="personal-input">Personal</label>
+    <input id="personal-input" type="number" min="0" max="5" value="0" onchange="depositCoins(this);">
+    <br>
+    <label for="tax-input">Tax</label>
+    <input id="tax-input" type="number" min="0" max="5" value="0" onchange="depositCoins(this);" on>
+    <br>
+    <button id="deposit-button" onclick="depositMoney()">Deposit</button>
+    <!-- <p id="deposit-err-p" style="color:red"></p> -->
+  </div>
+</body>
+
+</html>
