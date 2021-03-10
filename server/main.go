@@ -1,6 +1,5 @@
 /* TODO
  * Handle SetDeadline errors
- * Give members a set order since maps are unordered
  */
 
 /* Notes
