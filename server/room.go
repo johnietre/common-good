@@ -132,26 +132,26 @@ wait:
 		for phaseEnd.After(time.Now()) {
 			msg := <-room.hub
 			for _, member := range msg.Recipients {
-				if err := webs.JSON.Send(room.Members[member].ws, msg); err != nil {
+				if err := webs.JSON.Send(room.Members[member].ws, *msg); err != nil {
 					/* Handle error */
 					log.Println(err)
 				}
 			}
 		}
-		// Start the individual/deposit phase
-		var tax, funds int32
 		// Create set order for members
 		members := make([]*Member, 0, len(room.Members))
 		for _, member := range room.Members {
 			members = append(members, member)
 		}
+		// Start the individual/deposit phase
+		var tax, funds int32
 		for _, member := range members {
 			name := member.Name
 			room.depositTurn = member
 			msg.Action = "turn start"
 			msg.Contents = name + "'s turn"
 			for _, m := range room.Members {
-				webs.JSON.Send(m.ws, &msg)
+				webs.JSON.Send(m.ws, *msg)
 			}
 			// Wait for the member to allocate funds
 			/* Handle error from SetReadDeadline */
@@ -173,17 +173,18 @@ wait:
 			msg.Action = "turn end"
 			msg.Contents = name + "'s turn is over"
 			for _, m := range room.Members {
-				webs.JSON.Send(m.ws, &msg)
+				webs.JSON.Send(m.ws, msg)
 			}
 		}
 		room.depositTurn = nil
 		// Distribute the tax to the members
-		tax = tax * 2 / room.Joined
+		totalTax := tax * 2
+		tax = totalTax / room.Joined
 		msg.Action = "deposit"
 		msg.Sender = "server"
-		msg.Contents = fmt.Sprintf("Total tax contributed: %d, %d coins go to each player", tax*room.Joined, tax)
+		msg.Contents = fmt.Sprintf("Total tax contributed: %d, %d coins go to each player", totalTax, tax)
 		for _, member := range room.Members {
-			if err := webs.JSON.Send(member.ws, msg); err != nil {
+			if err := webs.JSON.Send(member.ws, *msg); err != nil {
 				/* Handle error */
 				log.Println(err)
 			}
