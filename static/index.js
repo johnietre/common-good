@@ -1,3 +1,13 @@
+/* TODO:
+ * Reorganize conditionals in ws.onmessage
+ */
+
+/* Ideas:
+ * When a chat message is received and the current user isn't a recipient,
+    show a message was sent between the recipients but don't show the contents
+    Ex: "A message was sent between User1 and User2"
+ */
+
 const maxCoins = 5;
 var room;
 var displayName;
@@ -19,6 +29,7 @@ ws.onmessage = function(msg) {
   msg = JSON.parse(msg.data);
   console.log(msg);
   if (msg.action == "error") {
+    // Use String.indexOf() to search for parts of message
     if (msg.action == "room doesn't exist") {
       connectErrP.innerHTML = "Room doesn't exist";
     } else if (msg.action == "room full") {
@@ -42,12 +53,30 @@ ws.onmessage = function(msg) {
     console.log("added");
     pregameErrP.value = "Added";
   } else if (msg.action == "started") {
-    pregameDiv.hidden = true;
-    lobbyDiv.hidden = false;
+    if (msg.contents.indexOf("turn") != -1) {
+      // Change divs
+    } else if (msg.contents.indexOf("round") != -1) {
+      // Change round info and such
+    } else {
+      // Start the game for the user
+    }
   } else if (msg.action == "ended") {
-    ws.close();
-    lobbyDiv.hidden = true;
-    connectDiv.hidden = false;
+    if (msg.contents.indexOf("turn") != -1) {
+      // Change divs
+    } else if (msg.contents.indexOf("round") != -1) {
+      // Change round info and such
+    } else {
+      ws.close();
+      window.location.reload();
+      lobbyDiv.hidden = true;
+      connectDiv.hidden = false;
+    }
+  } else if (msg.action == "chat") {
+    // Append to chat table
+  } else if (msg.action == "deposited") {
+    // Show amount of tax deposited to player
+  } else {
+    console.log(msg);
   }
 };
 

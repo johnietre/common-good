@@ -27,6 +27,17 @@
   </div>
 
   <div id="lobby-div" hidden>
+    <!-- 
+      Add checkbox menu allow users to show messages from select chats 
+      Ex: If "Lobby" is checked, everything else will be unchecked and chats
+        sent to the entire lobby will be shown
+      Ex: If "User1" is checked, all chats just between the current user and
+        User1 will be shown
+      Ex: If "User1" and "User2" is checked, all chats between the current user,
+        User1, and User2 will be shown (groupchat)
+      Add checkbox to show all chats that the user received, regardless of the
+        specific convo the message was sent to
+    -->
     <h1>Time Left: <span id="lobby-time-span"></span></h1>
     <ul id="member-list">
       <li><button onclick="changeConvo(this)">All</button></li>

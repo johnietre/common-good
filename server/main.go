@@ -1,5 +1,6 @@
 /* TODO
  * Handle SetDeadline errors
+ * Look at reworking room joining process in socketHandler
  */
 
 /* Notes
@@ -10,13 +11,15 @@
  */
 
 /* Ideas
-* Possibly have the socketHandler keep running handling the websocket
-	and give the room an property telling at what time the socket should
-	stop waiting for reads, therefore the SetReadDeadline will always end
-	at the correct time (is updated after each read)
-	 * Doing this decreases the amount of goroutines running
-* Possibly have it so that during chat time, the members are looped through
-	with a read deadline of a millisecond
+ * Possibly have the socketHandler keep running handling the websocket
+	 and give the room an property telling at what time the socket should
+	 stop waiting for reads, therefore the SetReadDeadline will always end
+	 at the correct time (is updated after each read)
+ 	 * Doing this decreases the amount of goroutines running
+ * Possibly have it so that during chat time, the members are looped through
+	 with a read deadline of a millisecond
+ * Possibly broadcast all chat messages (client JS will show a message ws sent)
+	 between the recipients but won't show the message
 */
 
 package main
@@ -68,7 +71,7 @@ func socketHandler(ws *webs.Conn) {
 			ws.Close()
 			return
 		}
-		if msg.Action == "create" {
+		if msg.Action == "created" {
 			room = createRoom()
 			if room == nil {
 				msg.Action = "error"
@@ -149,17 +152,16 @@ func socketHandler(ws *webs.Conn) {
 
 // Message holds JSON messages/actions as well as chat message info
 type Message struct {
-	// Actions:
-	// "error"
-	// "create"
-	// "joined"
-	// "added"
-	// "started"
-	// "chat"
-	// "turn start"
-	// "deposit"
-	// "turn end"
-	// "ended"
+	/* Actions
+	 * error: an error has occured (server or user)
+	 * created: the room has been created
+	 * joined: the user has joined the room
+	 * added: the user's name has been added to the room's roster
+	 * started: game, round, or turn has started
+	 * chat: a chat message
+	 * deposited: funds have been deposited
+	 * ended: game, round, or turn has ended
+	 */
 	Action     string   `json:"action"`
 	Contents   string   `json:"contents"`
 	Sender     string   `json:"sender"`

@@ -108,11 +108,14 @@ wait:
 	time.Sleep(time.Minute)
 	defer func() { // Clean up after game end
 		logger.Printf("Room %s ended", room.id)
-		for _, member := range room.Members {
-			msg := &Message{Action: "ended"}
-			webs.JSON.Send(member.ws, msg)
-			member.ws.Close()
+		msg := Message{
+			Action:   "ended",
+			Contents: "game ended",
+			Sender:   "server",
 		}
+		room.broadcast(msg, func(m *Member) {
+			m.ws.Close()
+		})
 		roomsLock.Lock()
 		delete(rooms, room.id)
 		roomsLock.Unlock()
@@ -124,10 +127,14 @@ wait:
 		// Set the time for the end of the chat phase
 		phaseEnd := time.Now().Add(time.Minute * room.chatTime)
 		room.NextPhase = phaseEnd.Unix()
+
+		/* Possibly unneeded; check how deadline works if msg recv before deadline
 		// Set the deadlines for the conns as the end of the chat phase
 		for _, member := range room.Members {
 			member.ws.SetReadDeadline(time.Unix(room.NextPhase, 0))
 		}
+		*/
+
 		// Listen for new messages until the end of the phase
 		for phaseEnd.After(time.Now()) {
 			msg := <-room.hub
@@ -148,11 +155,10 @@ wait:
 		for _, member := range members {
 			name := member.Name
 			room.depositTurn = member
-			msg.Action = "turn start"
+			msg.Action = "started"
+			msg.Sender = "server"
 			msg.Contents = name + "'s turn"
-			for _, m := range room.Members {
-				webs.JSON.Send(m.ws, *msg)
-			}
+			room.broadcast(msg, nil)
 			// Wait for the member to allocate funds
 			/* Handle error from SetReadDeadline */
 			member.ws.SetReadDeadline(time.Now().Add(time.Minute * room.privateTime))
@@ -170,26 +176,21 @@ wait:
 			funds = int32(funds64)
 			member.Funds += funds
 			tax += room.MaxCoins - funds
-			msg.Action = "turn end"
+			msg.Action = "ended"
+			msg.Sender = "server"
 			msg.Contents = name + "'s turn is over"
-			for _, m := range room.Members {
-				webs.JSON.Send(m.ws, msg)
-			}
+			room.broadcast(msg)
 		}
 		room.depositTurn = nil
 		// Distribute the tax to the members
 		totalTax := tax * 2
 		tax = totalTax / room.Joined
-		msg.Action = "deposit"
+		msg.Action = "deposited"
 		msg.Sender = "server"
 		msg.Contents = fmt.Sprintf("Total tax contributed: %d, %d coins go to each player", totalTax, tax)
-		for _, member := range room.Members {
-			if err := webs.JSON.Send(member.ws, *msg); err != nil {
-				/* Handle error */
-				log.Println(err)
-			}
-			member.Funds += tax
-		}
+		room.broadcast(msg, func(m *Member) {
+			m.Funds += tax
+		})
 	}
 	return nil
 }
@@ -238,4 +239,16 @@ func (room *Room) removeMember(name string, ws *webs.Conn) error {
 	}
 	delete(room.Members, name)
 	return nil
+}
+
+func (room *Room) broadcast(msg Message, f func(*Member)) {
+	for name, member := range room.Members {
+		if name != msg.Sender {
+			/* TODO: Handle error */
+			webs.JSON.Send(member.ws, &msg)
+			if f != nil {
+				f(member)
+			}
+		}
+	}
 }
