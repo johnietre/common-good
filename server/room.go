@@ -4,12 +4,12 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"os/exec"
 	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/google/uuid"
 	webs "golang.org/x/net/websocket"
 )
 
@@ -21,7 +21,7 @@ type Room struct {
 	Joined      int32 // Number of members actually joined
 	Capacity    int32
 	Round       int32
-	Rounds      int32 // Total number of rounds in game
+	TotalRounds int32
 	MaxCoins    int32
 	NextPhase   int64 // unix time
 	id          string
@@ -32,68 +32,63 @@ type Room struct {
 	sync.RWMutex
 }
 
-var ( // possibly use sync.Map
-	rooms     map[string]*Room = make(map[string]*Room) // [UUID]Room
-	roomsLock sync.RWMutex
+var (
+	rooms sync.Map // [UUID]*Room
 )
 
 func createRoom() *Room {
-	roomsLock.Lock()
-	defer roomsLock.Unlock()
-	var uuid string
-	for {
-		buuid, err := exec.Command("uuidgen").Output()
-		if err != nil {
-			logger.Println(err)
-			return nil
-		}
-		uuid = string(buuid[:8])
-		if _, ok := rooms[uuid]; !ok {
-			break
-		}
-	}
 	room := &Room{
 		Members:     make(map[string]*Member),
 		Capacity:    3,
-		Rounds:      3,
-		id:          uuid,
+		TotalRounds: 3,
 		chatTime:    3,
 		privateTime: 1,
 		hub:         make(chan *Message, 10),
 	}
-	rooms[uuid] = room
+	for {
+		bid, err := uuid.NewRandom()
+		if err != nil {
+			logger.Println(err)
+			return nil
+		}
+		room.id = bid.String()
+		if _, loaded := rooms.LoadOrStore(room.id, room); !loaded {
+			break
+		}
+	}
 	go room.run()
 	return room
 }
 
 // Possibly check for full room here
 func getRoom(roomID string) (*Room, error) {
-	roomsLock.RLock()
-	defer roomsLock.RUnlock()
-	room := rooms[roomID]
-	if room == nil {
+	iRoom, ok := rooms.Load(roomID)
+	if !ok {
 		return nil, errors.New("room doesn't exist")
-	} else if !room.connect() {
+	}
+	room := iRoom.(*Room)
+	if !room.connect() {
 		return nil, errors.New("room full")
 	}
 	return room, nil
 }
 
+// Start the game room
 func (room *Room) run() error {
 	// Wait for every member to join
 wait:
-	for atomic.LoadInt32(&room.Joined) < room.Capacity {
+	for room.getJoined() < room.Capacity {
 	}
 	logger.Println("Starting room in 20s")
 	time.Sleep(time.Second * 20)
 	allGood := true
 	for _, member := range room.Members {
-		msg := &Message{Action: "started"}
+		msg := &Message{Action: "start"}
 		if err := webs.JSON.Send(member.ws, msg); err != nil {
 			logger.Println(err)
 			member.ws.Close()
-			atomic.AddInt32(&room.Connected, -1)
-			atomic.AddInt32(&room.Joined, -1)
+			room.decrJoined()
+			room.decrConnected()
 			room.Lock()
 			delete(room.Members, member.Name)
 			room.Unlock()
@@ -116,14 +111,12 @@ wait:
 		room.broadcast(msg, func(m *Member) {
 			m.ws.Close()
 		})
-		roomsLock.Lock()
-		delete(rooms, room.id)
-		roomsLock.Unlock()
+		rooms.Delete(room.id)
 	}()
 
 	// Game code
 	var msg *Message
-	for room.Round = 1; room.Round <= room.Rounds; room.Round++ {
+	for room.Round = 1; room.Round <= room.TotalRounds; room.Round++ {
 		// Set the time for the end of the chat phase
 		phaseEnd := time.Now().Add(time.Minute * room.chatTime)
 		room.NextPhase = phaseEnd.Unix()
@@ -155,10 +148,10 @@ wait:
 		for _, member := range members {
 			name := member.Name
 			room.depositTurn = member
-			msg.Action = "started"
+			msg.Action = "start"
 			msg.Sender = "server"
 			msg.Contents = name + "'s turn"
-			room.broadcast(msg, nil)
+			room.broadcast(*msg, nil)
 			// Wait for the member to allocate funds
 			/* Handle error from SetReadDeadline */
 			member.ws.SetReadDeadline(time.Now().Add(time.Minute * room.privateTime))
@@ -179,7 +172,7 @@ wait:
 			msg.Action = "ended"
 			msg.Sender = "server"
 			msg.Contents = name + "'s turn is over"
-			room.broadcast(msg)
+			room.broadcast(*msg, nil)
 		}
 		room.depositTurn = nil
 		// Distribute the tax to the members
@@ -188,7 +181,7 @@ wait:
 		msg.Action = "deposited"
 		msg.Sender = "server"
 		msg.Contents = fmt.Sprintf("Total tax contributed: %d, %d coins go to each player", totalTax, tax)
-		room.broadcast(msg, func(m *Member) {
+		room.broadcast(*msg, func(m *Member) {
 			m.Funds += tax
 		})
 	}
@@ -196,8 +189,8 @@ wait:
 }
 
 func (room *Room) connect() bool {
-	if atomic.AddInt32(&room.Connected, 1) > room.Capacity {
-		atomic.AddInt32(&room.Connected, -1)
+	if room.incrConnected() > room.Capacity {
+		room.decrConnected()
 		return false
 	}
 	return true
@@ -251,4 +244,36 @@ func (room *Room) broadcast(msg Message, f func(*Member)) {
 			}
 		}
 	}
+}
+
+func (r *Room) getRound() int32 {
+	return atomic.LoadInt32(&r.Round)
+}
+
+func (r *Room) incrRound() int32 {
+	return atomic.AddInt32(&r.Round, 1)
+}
+
+func (r *Room) getJoined() int32 {
+	return atomic.LoadInt32(&r.Joined)
+}
+
+func (r *Room) incrJoined() int32 {
+	return atomic.AddInt32(&r.Joined, 1)
+}
+
+func (r *Room) decrJoined() int32 {
+	return atomic.AddInt32(&r.Joined, -1)
+}
+
+func (r *Room) getConnected() int32 {
+	return atomic.LoadInt32(&r.Connected)
+}
+
+func (r *Room) incrConnected() int32 {
+	return atomic.AddInt32(&r.Connected, 1)
+}
+
+func (r *Room) decrConnected() int32 {
+	return atomic.AddInt32(&r.Connected, -1)
 }

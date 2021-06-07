@@ -29,7 +29,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"strings"
 
 	webs "golang.org/x/net/websocket"
 )
@@ -47,20 +46,39 @@ var (
 func main() {
 	temp = template.Must(template.ParseFiles("../templates/index.html"))
 
+	server := &http.Server{
+		Addr:     ip + ":" + port,
+		Handler:  routes(),
+		ErrorLog: logger,
+	}
+	panic(server.ListenAndServe())
+}
+
+func routes() *http.ServeMux {
+	r := http.NewServeMux()
 	static := http.FileServer(http.Dir("../static"))
-	http.Handle("/static/", http.StripPrefix("/static", static))
-	http.HandleFunc("/", pageHandler)
-	http.Handle("/socket/", webs.Handler(socketHandler))
-	panic(http.ListenAndServe(ip+":"+port, nil))
+	r.Handle("/static/", http.StripPrefix("/static", static))
+	r.HandleFunc("/", pageHandler)
+	r.Handle("/socket/", webs.Handler(socketHandler))
+	return r
 }
 
 func pageHandler(w http.ResponseWriter, r *http.Request) {
-	temp.Execute(w, nil)
+	if err := temp.Execute(w, nil); err != nil {
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		logger.Println(err)
+	}
 }
 
 // Handle the real-time connections
 func socketHandler(ws *webs.Conn) {
-	// defer ws.Close()
+	var closePtr *bool
+	*closePtr = true
+	defer func() {
+		if *closePtr {
+			ws.Close()
+		}
+	}()
 	var room *Room
 	var msg *Message
 	var err error
@@ -71,102 +89,109 @@ func socketHandler(ws *webs.Conn) {
 			ws.Close()
 			return
 		}
-		if msg.Action == "created" {
+		if msg.Action == "create" {
 			room = createRoom()
 			if room == nil {
-				msg.Action = "error"
-				msg.Contents = "error creating room"
-				webs.JSON.Send(ws, msg)
-				continue
+				webs.JSON.Send(ws, newErrMsg("error creating room"))
+			} else {
+				msg = &Message{Action: "create", Contents: room.id}
+				if err := webs.JSON.Send(ws, msg); err != nil {
+					logger.Println(err)
+					return
+				}
 			}
-			// msg.Action = "created"
-			// msg.Contents = room.id
-			// if err := webs.JSON.Send(ws, msg); err != nil {
-			//   logger.Println(err)
-			//   ws.Close()
-			//   return
-			// }
-			break
-		}
-		room, err = getRoom(msg.Contents)
-		if err != nil {
-			msg.Action = "error"
-			msg.Contents = err.Error()
-			if err := webs.JSON.Send(ws, msg); err != nil {
-				logger.Println(err)
-				ws.Close()
-				return
+		} else if msg.Action == "join" {
+			room, err = getRoom(msg.Contents)
+			if err != nil {
+				if err := webs.JSON.Send(ws, newErrMsg(err.Error())); err != nil {
+					logger.Println(err)
+					return
+				}
+			} else {
+				msg = &Message{Action: "join", Contents: "room joined"}
+				if err := webs.JSON.Send(ws, msg); err != nil {
+					logger.Println(err)
+					return
+				}
 			}
-		} else if room == nil {
-			msg.Action = "error"
-			msg.Contents = "room doesn't exist"
-			if err := webs.JSON.Send(ws, msg); err != nil {
+		} else {
+			if err := webs.JSON.Send(ws, newErrMsg("invalid action")); err != nil {
 				logger.Println(err)
-				ws.Close()
 				return
 			}
 		}
-	}
-	msg.Action = "joined"
-	msg.Contents = room.id
-	if err = webs.JSON.Send(ws, msg); err != nil {
-		logger.Println(err)
-		return
 	}
 
-	// Add user to members
-	if err = webs.JSON.Receive(ws, msg); err != nil {
-		logger.Println(err)
-		return
-	}
-	member, err := room.addMember(msg.Contents, ws)
-	for err != nil {
-		msg.Action = "error"
-		msg.Contents = err.Error()
-		webs.JSON.Send(ws, msg)
+	var member *Member
+	for member == nil {
 		if err = webs.JSON.Receive(ws, msg); err != nil {
 			logger.Println(err)
 			return
 		}
-		member, err = room.addMember(msg.Contents, ws)
-	}
-	msg.Action = "added"
-	webs.JSON.Send(ws, msg)
-	// Listen for and filter messages from the member
-	for room.Round <= room.Rounds {
-		if err := webs.JSON.Receive(ws, msg); err != nil {
-			if strings.Contains(err.Error(), "timeout") {
-				continue
-			} else if strings.Contains(err.Error(), "closed") {
+		if msg.Action != "join" {
+			if err := webs.JSON.Send(ws, newErrMsg("invalid action")); err != nil {
+				logger.Println(err)
 				return
 			}
-			log.Println(err)
-		}
-		if (msg.Action == "chat" && room.depositTurn == nil) || (msg.Action == "deposit" && room.depositTurn == member) {
-			// TODO: Make it so that if the msg is overwritten outside of the hub/function,
-			// the msg contents won't be changed
-			room.hub <- msg
+		} else if member, err = room.addMember(msg.Contents, ws); err != nil {
+			if err := webs.JSON.Send(ws, newErrMsg(err.Error())); err != nil {
+				logger.Println(err)
+				return
+			}
 		}
 	}
+	msg = &Message{Action: "join", Contents: "joined"}
+	if err = webs.JSON.Send(ws, msg); err != nil {
+		logger.Println(err)
+		return
+	}
+	*closePtr = false
+
+	/*
+		// Listen for and filter messages from the member
+		for room.getRound() <= room.Rounds {
+			if err := webs.JSON.Receive(ws, msg); err != nil {
+				if strings.Contains(err.Error(), "timeout") {
+					continue
+				} else if strings.Contains(err.Error(), "closed") {
+					return
+				}
+				log.Println(err)
+			}
+			if (msg.Action == "chat" && room.depositTurn == nil) || (msg.Action == "deposit" && room.depositTurn == member) {
+				// TODO: Make it so that if the msg is overwritten outside of the hub/function,
+				// the msg contents won't be changed
+				room.hub <- msg
+			}
+		}
+	*/
 }
 
 // Message holds JSON messages/actions as well as chat message info
 type Message struct {
 	/* Actions
 	 * error: an error has occured (server or user)
-	 * created: the room has been created
+	 * create: deals with room creation
 	 * joined: the user has joined the room
 	 * added: the user's name has been added to the room's roster
-	 * started: game, round, or turn has started
+	 * start: game, round, or turn has started
 	 * chat: a chat message
 	 * deposited: funds have been deposited
 	 * ended: game, round, or turn has ended
 	 */
 	Action     string   `json:"action"`
-	Contents   string   `json:"contents"`
+	Contents   string   `json:Contents:`
 	Sender     string   `json:"sender"`
 	Recipients []string `json:"recipients"`
 	Timestamp  int64    `json:"timestamp"`
+}
+
+func newErrMsg(contents string) *Message {
+	return &Message{
+		Action:   "error",
+		Contents: contents,
+		Sender:   "server",
+	}
 }
 
 // Member holds room member info
