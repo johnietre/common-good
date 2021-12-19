@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+
+<html lang="en-US">
+
+<head>
+  <title>Greater Good</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1.0">
+  <script src="https://unpkg.com/vue@next"></script>
+  <style>
+    html,body,#app {
+      margin: 0;
+      height: 100%;
+    }
+    #non-chat-space, #chat {
+      display: inline-block;
+      height: 100%;
+      box-sizing: border-box;
+      padding: 0 20px;
+    }
+    #non-chat-space {
+      vertical-align: top;
+      width: 60%;
+    }
+    #chat {
+      width: 40%;
+    }
+  </style>
+</head>
+
+<body>
+  <div id="app">
+    <h3>Utility Buttons</h3>
+    <button @click="startGame" :disabled="!joined || me.name == ''">{{ startGameHTML }}</button>
+    <button @click="startTurn" :disabled="room.round == 0">{{ startTurnHTML }}</button>
+    <button @click="stopWs" :disabled="ws === null || ws.closed">Stop Chat</button>
+
+    <h1>Greater Good</h1>
+    <!-- Section to join game -->
+    <div id="join-leave">
+      <button v-if="joined" v-on:click="leaveRoom">Leave</button>
+      <input
+        autofocus
+        autocomplete="off"
+        placeholder="Room ID"
+        maxLength="8"
+        :disabled="joined"
+        v-model="room.roomId"
+        @keyup.enter="joinRoom"
+      />
+      <button
+        v-if="!joined"
+        @click="joinRoom"
+        :disabled="this.room.roomId.length != 8"
+      >Join</button>
+      <button v-if="!joined" @click="newRoom">New Room</button>
+    </div>
+
+    <!-- Main playing space and space for room creation -->
+    <div id="main-space">
+      <!-- Space for new room creation -->
+      <template id="creating-space" v-if="creatingRoom">
+        <label>Max Members</label>
+        <input type="number" min="0" v-model="room.maxMembers"/>
+        <br>
+        <label>Total Rounds</label>
+        <input type="number" min="0" v-model="room.totalRounds">
+        <br>
+        <button
+          @click="createRoom"
+          :disabled="room.maxMembers == 0 || room.totalRounds == 0"
+        >Create</button>
+      </template>
+
+      <!-- Game space/members listed space/create room space -->
+      <template id="main-game-space" v-else-if="joined">
+        <div id="non-chat-space">
+          <!-- Pre-game/members space -->
+          <div id="members-space" v-if="room.round == 0">
+            <h3>Players</h3>
+            <input
+              autocomplete="off"
+              placeholder="Name"
+              maxLength="20"
+              v-model="me.name"
+            />
+            <button @click="submitName" :disabled="me.name == ''">Submit</button>
+            <p>Your name is: {{ me.name }}</p>
+          </div>
+
+          <!-- Depositing space -->
+          <div id="turn-space" v-else-if="room.turn == me.name">
+            <p>You have {{ coins }} coins</p>
+            <label for="personal-coin-input">Personal Coins</label>
+            <input
+              type="number"
+              min="0"
+              max="5"
+              id="personal-coin-input"
+              name="personal-coin-input"
+              v-model="personalCoins"
+            />
+            <br />
+            <label for="tax-coin-input">Tax Coins</label>
+            <input
+              type="number"
+              min="0"
+              max="5"
+              id="tax-coin-input"
+              name="tax-coin-input"
+              v-model="taxCoins"
+            />
+            <br />
+            <button @click="depositCoins">Deposit</button>
+          </div>
+
+          <!-- Voting space -->
+          <div id="voting-div" v-else-if="false">
+            <input
+              autocomplete="off"
+              maxLength="20"
+              v-model="vote"
+            />
+            <br />
+            <button @click="submitVote">Submit</button>
+          </div>
+
+          <!-- Game end/winner space -->
+          <div id="game-end-div" v-else-if="false">
+            <p>No one won</p>
+          </div>
+
+          <!-- Waiting space -->
+          <div id="game-div" v-else>
+            <p>It's {{ room.turn }}'s turn</p>
+          </div>
+        </div>
+
+        <!-- Chat space -->
+        <!-- TODO: Hide chat during deposit turn -->
+        <div id="chat">
+          <h3>Chat</h3>
+          <div id="chat-messages">
+            <ul style="list-style-type:none;">
+              <chat-msg
+                v-for="msg in messages"
+                :key="msg.id"
+                :msg="msg"
+                ></chat-msg>
+            </ul>
+          </div>
+          <div id="chat-message-input">
+            <textarea
+              rows="1"
+              cols="50"
+              placeholder="Message"
+              v-model="message"
+            ></textarea>
+            <button @click="sendChat">Send</button>
+          </div>
+        </div>
+      </template>
+    </div>
+
+  </div>
+
+  <script>
+    class Room {
+      constructor() {
+        this.roomId = "johnier3";
+        this.maxMembers = 5;
+        this.members = {};
+        this.turn = "";
+        this.round = 0;
+        this.totalRounds = 5;
+      }
+    };
+    class Member {
+      constructor() {
+        this.name = "";
+      }
+    };
+    class MessageAction {
+      static Join = new MessageAction("join");
+      static Create = new MessageAction("create");
+      static Name = new MessageAction("name");
+      static Chat = new MessageAction("chat");
+      static GameStart = new MessageAction("gameStart");
+      static RoundStart = new MessageAction("roundStart");
+      static TurnStart = new MessageAction("turnStart");
+      static Deposit = new MessageAction("deposit");
+      static Vote = new MessageAction("vote");
+      static RoundEnd = new MessageAction("roundEnd");
+      static Leave = new MessageAction("leave");
+      static GameEnd = new MessageAction("gameEnd");
+      static Error = new MessageAction("error");
+
+      constructor(name) {
+        this.name = name;
+      }
+    };
+    class Message {
+      constructor() {
+        this.id = 0;
+        this.action = new MessageAction();
+        this.sender = "";
+        this.recipients = [];
+        this.contents = "";
+        this.error = "";
+      }
+    };
+
+    const App = {
+      data() {
+        return {
+          ws: null,
+          room: new Room(),
+          me: new Member(),
+          creatingRoom: false,
+          joined: false,
+          message: "",
+          messages: [],
+          personalCoins: 0,
+          taxCoins: 0,
+          coins: 0,
+          vote: ""
+        };
+      },
+
+      mounted() {
+        const url = new URL("ws", window.location.href);
+        url.protocol = "ws";
+        this.ws = new WebSocket(url.toString());
+        this.ws.onopen = () => {
+          console.log("Websocket opened");
+        };
+        this.ws.onmessage = (event) => {
+          let msg = JSON.parse(event.data);
+          switch (msg.action) {
+          case MessageAction.Join.name:
+            if (msg.error != "") {
+              // TODO: Handle error
+              console.log(`Received error from join: ${msg.error}`);
+              break;
+            }
+            this.room = Object.assign(new Room, JSON.parse(msg.contents));
+            this.joined = true;
+            break;
+          case MessageAction.Create.name:
+            if (msg.error == "") {
+              this.room = Object.assign(new Room, JSON.parse(msg.contents));
+              this.joined = true;
+              this.creatingRoom = false;
+            } else {
+              // TODO: Handle error
+              console.log(`Received error from create: ${msg.error}`);
+            }
+            break;
+          case MessageAction.Name.name:
+            if (msg.error != "") {
+              // TODO: Handle Error
+              console.log(`Received error from name: ${msg.error}`);
+              break;
+            }
+            // TODO: Handle accepted name
+            break;
+          case MessageAction.Chat.name:
+            this.messages.push(msg);
+            break;
+          case MessageAction.StartGame.name:
+            // TODO: Handle game start
+            break;
+          case MessageAction.RoundStart.name:
+            // TODO: Handle round start
+            this.room.round++;
+            break;
+          case MessageAction.TurnStart.name:
+            // TODO: Handle turn
+            this.room.turn = msg.contents;
+            break;
+          case MessageAction.Deposit.name:
+            // TODO: Handle deposit
+            break;
+          case MessageAction.Vote.name:
+            // TODO: Handle vote
+            break;
+          case MessageAction.RoundEnd.name:
+            // TODO: Handle round end
+            break;
+          case MessageAction.Leave.name:
+            // TODO: Handle leave
+            this.room = new Room();
+            this.joined = false;
+            break;
+          case MessageAction.GameEnd.name:
+            // TODO: Handle game end
+            this.room = new Room();
+            this.joined = false;
+            break;
+          case MessageAction.Error.name:
+            // TODO: Handle error
+            console.log(`Received error message: ${msg.error}`);
+            break;
+          default:
+            if (msg !== undefined)
+              console.log(`Invalid message action: ${msg.action}`);
+            else
+              console.log("Undefined message");
+          }
+        };
+        this.ws.onerror = err => console.log("Websocket error: ", err);
+        this.ws.onclose = () => console.log("Websocket closed");
+      },
+
+      computed: {
+        startGameHTML() {
+          return (this.room.round == 0) ? "Start Game" : "Stop Game";
+        },
+        startTurnHTML() {
+          return (this.room.turn != this.me.name) ? "Start Turn" : "Stop Turn";
+        },
+      },
+
+      components: {
+        "chat-msg": {
+          props: ["msg"],
+          template: `<li>{{ msg.sender }} => {{ msg.contents }}</li>`
+        }
+      },
+
+      methods: {
+        joinRoom() {
+          if (this.ws.readyState == WebSocket.CLOSED) {
+            this.joined = this.room.roomId == "johnier3";
+            return;
+          }
+          let msg = {
+            action: MessageAction.Join.name,
+            contents: this.room.roomId
+          };
+          this.ws.send(JSON.stringify(msg));
+        },
+        newRoom() {
+          this.creatingRoom = true;
+        },
+        createRoom() {
+          if (this.ws.readyState == WebSocket.CLOSED) {
+            this.creatingRoom = false;
+            this.joined = true;
+            this.room.roomId = "johnier3";
+            return;
+          }
+          let msg = {
+            action: MessageAction.Create.name,
+            contents: JSON.stringify(this.room)
+          };
+          this.ws.send(msg);
+        },
+        submitName() {
+          if (this.ws.readySTate == WebSocket.CLOSED) {
+            console.log(`Submitted name: ${this.me.name}`);
+            return;
+          }
+          let msg = {
+            action: MessageAction.Join.name,
+            sender: this.me.name
+          };
+          this.ws.send(JSON.stringify(msg));
+        },
+        sendChat() {
+          let msg = {
+            action: MessageAction.Chat.name,
+            sender: this.me.name,
+            contents: this.message
+          };
+          this.message = "";
+          if (this.ws.readyState == WebSocket.CLOSED) {
+            msg.id = messages.length;
+            this.messages.push(msg);
+            return;
+          }
+          this.ws.send(JSON.stringify(msg));
+        },
+        depositCoins() {
+          console.log("Depositing coins");
+        },
+        submitVote() {
+          console.log("Submitting vote");
+        },
+        leaveRoom() {
+          if (this.ws.readyState == WebSocket.CLOSED) {
+            this.room = new Room();
+            this.joined = false;
+            return;
+          }
+          this.ws.send(JSON.stringify({action: MessageAction.Leave.name}));
+        },
+
+        startGame() {
+          if (this.room.round == 0) {
+            this.room.round = 1;
+          } else {
+            this.room.round = 0;
+            this.room.turn = "";
+          }
+        },
+        startTurn() {
+          if (this.room.round != 0) {
+            this.room.turn = (this.room.turn == this.me.name) ? "" : this.me.name;
+          }
+        },
+        stopWs() {
+          this.ws.close();
+        }
+      },
+    };
+    const app = Vue.createApp(App)
+    const vm = app.mount("#app");
+  </script>
+</body>
+</html>
